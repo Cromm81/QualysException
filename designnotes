@@ -1,0 +1,8 @@
+
+Design
+
+- Our CMDB is not 100% accurate, how can we account for that in the automation process here
+- When i reun the integration to make sure we cover all QID detected. Even though i ran it multiple times i am always getting the result that i have 121 more and to rerun\
+- there is a CVE field in the exception request that needs to be populated with the CVE number from qualys
+- i need code to clean up the items this creates on each run to have a clean slate
+- i want you to write design docs for this also 
