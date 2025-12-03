@@ -1,343 +1,154 @@
 /**
- * Qualys Integration - Enhanced Cleanup Script
+ * Qualys RITM Cleanup Script
  * 
- * Use this to clean up RITMs created during testing.
- * Run in Scripts - Background.
- * 
- * WARNING: This will delete RITMs! Use with caution.
- * Always run with DRY_RUN = true first to preview.
+ * HOW TO USE:
+ * 1. Update CATALOG_ITEM_SYS_ID below
+ * 2. Run in Scripts - Background
+ * 3. By default, runs DRY RUN showing what would be deleted
+ * 4. To actually delete, change DELETE_MODE to true
  */
 
-var QualysCleanup = Class.create();
-QualysCleanup.prototype = {
+// ============================================================
+// CONFIGURATION - UPDATE THESE
+// ============================================================
+
+var CATALOG_ITEM_SYS_ID = 'YOUR_CATALOG_ITEM_SYS_ID';  // <-- PUT YOUR SYS_ID HERE
+
+var DELETE_MODE = false;  // false = DRY RUN (safe), true = ACTUALLY DELETE
+
+var FILTER = 'all';  // Options: 'all', 'today', 'test_only'
+
+// ============================================================
+// SCRIPT STARTS HERE - DO NOT MODIFY BELOW
+// ============================================================
+
+gs.info('');
+gs.info('╔════════════════════════════════════════════════════════════╗');
+gs.info('║           QUALYS RITM CLEANUP SCRIPT                       ║');
+gs.info('╚════════════════════════════════════════════════════════════╝');
+gs.info('');
+gs.info('Configuration:');
+gs.info('  Catalog Item: ' + CATALOG_ITEM_SYS_ID);
+gs.info('  Filter: ' + FILTER);
+gs.info('  Mode: ' + (DELETE_MODE ? '*** DELETE MODE - WILL DELETE RECORDS ***' : 'DRY RUN (safe preview)'));
+gs.info('');
+
+// Validate sys_id
+if (CATALOG_ITEM_SYS_ID === 'YOUR_CATALOG_ITEM_SYS_ID' || !CATALOG_ITEM_SYS_ID) {
+    gs.error('ERROR: You must set CATALOG_ITEM_SYS_ID before running this script!');
+    gs.info('');
+    gs.info('To find your catalog item sys_id, run this:');
+    gs.info('  var gr = new GlideRecord("sc_cat_item");');
+    gs.info('  gr.addQuery("name", "CONTAINS", "exception");');
+    gs.info('  gr.query();');
+    gs.info('  while (gr.next()) gs.info(gr.name + " = " + gr.sys_id);');
+    gs.info('');
+} else {
+    // Build query
+    var gr = new GlideRecord('sc_req_item');
+    gr.addQuery('cat_item', CATALOG_ITEM_SYS_ID);
     
-    // ============================================================
-    // CONFIGURATION - UPDATE THESE VALUES
-    // ============================================================
-    
-    CATALOG_ITEM_SYS_ID: 'YOUR_CATALOG_ITEM_SYS_ID',  // TODO: Replace
-    
-    // Safety settings
-    DRY_RUN: true,              // Set to false to actually delete
-    MAX_DELETE_LIMIT: 500,      // Maximum records to delete (safety)
-    
-    // ============================================================
-    // INITIALIZATION
-    // ============================================================
-    
-    initialize: function() {
-        this.deletedRitms = [];
-        this.deletedRequests = [];
-        this.errors = [];
-    },
-    
-    // ============================================================
-    // MAIN CLEANUP METHODS
-    // ============================================================
-    
-    /**
-     * Delete all RITMs for the catalog item
-     */
-    deleteAll: function() {
-        gs.info('=== QUALYS CLEANUP: Delete All ===');
-        gs.info('Catalog Item: ' + this.CATALOG_ITEM_SYS_ID);
-        gs.info('Dry Run: ' + this.DRY_RUN);
-        gs.info('');
-        
-        var gr = new GlideRecord('sc_req_item');
-        gr.addQuery('cat_item', this.CATALOG_ITEM_SYS_ID);
-        gr.query();
-        
-        this._processRecords(gr);
-    },
-    
-    /**
-     * Delete only RITMs created today
-     */
-    deleteTodayOnly: function() {
-        gs.info('=== QUALYS CLEANUP: Today Only ===');
-        gs.info('Catalog Item: ' + this.CATALOG_ITEM_SYS_ID);
-        gs.info('Dry Run: ' + this.DRY_RUN);
-        gs.info('');
-        
-        var gr = new GlideRecord('sc_req_item');
-        gr.addQuery('cat_item', this.CATALOG_ITEM_SYS_ID);
+    if (FILTER === 'today') {
         gr.addQuery('sys_created_on', '>=', gs.beginningOfToday());
-        gr.query();
-        
-        this._processRecords(gr);
-    },
+        gs.info('Filtering: Only RITMs created TODAY');
+    } else if (FILTER === 'test_only') {
+        gs.info('Filtering: Only RITMs with QID starting with TEST_');
+    }
     
-    /**
-     * Delete RITMs created within a date range
-     * @param {string} startDate - Start date (YYYY-MM-DD)
-     * @param {string} endDate - End date (YYYY-MM-DD)
-     */
-    deleteByDateRange: function(startDate, endDate) {
-        gs.info('=== QUALYS CLEANUP: Date Range ===');
-        gs.info('Catalog Item: ' + this.CATALOG_ITEM_SYS_ID);
-        gs.info('Date Range: ' + startDate + ' to ' + endDate);
-        gs.info('Dry Run: ' + this.DRY_RUN);
-        gs.info('');
-        
-        var gr = new GlideRecord('sc_req_item');
-        gr.addQuery('cat_item', this.CATALOG_ITEM_SYS_ID);
-        gr.addQuery('sys_created_on', '>=', startDate);
-        gr.addQuery('sys_created_on', '<=', endDate + ' 23:59:59');
-        gr.query();
-        
-        this._processRecords(gr);
-    },
+    gr.query();
     
-    /**
-     * Delete RITMs with QIDs matching a pattern
-     * @param {string} qidPattern - QID pattern (e.g., '9000' to match 90001, 90002, etc.)
-     */
-    deleteByQIDPattern: function(qidPattern) {
-        gs.info('=== QUALYS CLEANUP: QID Pattern ===');
-        gs.info('Catalog Item: ' + this.CATALOG_ITEM_SYS_ID);
-        gs.info('QID Pattern: ' + qidPattern);
-        gs.info('Dry Run: ' + this.DRY_RUN);
-        gs.info('');
+    var totalCount = gr.getRowCount();
+    gs.info('');
+    gs.info('Found ' + totalCount + ' RITMs matching criteria');
+    gs.info('');
+    
+    if (totalCount === 0) {
+        gs.info('Nothing to clean up!');
+    } else {
+        gs.info('─────────────────────────────────────────────────────────────');
+        gs.info('RITM Number       | QID                | State      | Created');
+        gs.info('─────────────────────────────────────────────────────────────');
         
-        var gr = new GlideRecord('sc_req_item');
-        gr.addQuery('cat_item', this.CATALOG_ITEM_SYS_ID);
-        gr.query();
+        var deleteCount = 0;
+        var skipCount = 0;
+        var requestsToCheck = [];
         
-        var matchedRecords = [];
         while (gr.next()) {
-            var qid = gr.variables.identified_qid_s ? gr.variables.identified_qid_s.toString() : '';
-            if (qid.indexOf(qidPattern) !== -1) {
-                matchedRecords.push(gr.sys_id.toString());
-            }
-        }
-        
-        gs.info('Found ' + matchedRecords.length + ' RITMs matching QID pattern');
-        
-        // Process matched records
-        for (var i = 0; i < matchedRecords.length; i++) {
-            var ritm = new GlideRecord('sc_req_item');
-            if (ritm.get(matchedRecords[i])) {
-                this._deleteRITM(ritm);
-            }
-        }
-        
-        this._cleanupEmptyRequests();
-        this._printSummary();
-    },
-    
-    /**
-     * Delete only test RITMs (QID starts with TEST_)
-     */
-    deleteTestRITMs: function() {
-        gs.info('=== QUALYS CLEANUP: Test RITMs Only ===');
-        gs.info('Looking for QIDs starting with TEST_');
-        gs.info('Dry Run: ' + this.DRY_RUN);
-        gs.info('');
-        
-        this.deleteByQIDPattern('TEST_');
-    },
-    
-    /**
-     * Delete RITMs by state
-     * @param {string} state - State value (e.g., 'open', 'closed', 'all')
-     */
-    deleteByState: function(state) {
-        gs.info('=== QUALYS CLEANUP: By State ===');
-        gs.info('Catalog Item: ' + this.CATALOG_ITEM_SYS_ID);
-        gs.info('State Filter: ' + state);
-        gs.info('Dry Run: ' + this.DRY_RUN);
-        gs.info('');
-        
-        var gr = new GlideRecord('sc_req_item');
-        gr.addQuery('cat_item', this.CATALOG_ITEM_SYS_ID);
-        
-        if (state === 'open') {
-            gr.addQuery('state', 'NOT IN', '3,4,7');  // Not closed, cancelled, or complete
-        } else if (state === 'closed') {
-            gr.addQuery('state', 'IN', '3,4,7');  // Closed, cancelled, or complete
-        }
-        // 'all' = no state filter
-        
-        gr.query();
-        
-        this._processRecords(gr);
-    },
-    
-    // ============================================================
-    // INTERNAL METHODS
-    // ============================================================
-    
-    /**
-     * Process and delete records from a GlideRecord query
-     */
-    _processRecords: function(gr) {
-        var count = gr.getRowCount();
-        gs.info('Found ' + count + ' RITMs');
-        
-        if (count === 0) {
-            gs.info('Nothing to delete.');
-            return;
-        }
-        
-        if (count > this.MAX_DELETE_LIMIT) {
-            gs.warn('Record count (' + count + ') exceeds MAX_DELETE_LIMIT (' + this.MAX_DELETE_LIMIT + ')');
-            gs.warn('Limiting to first ' + this.MAX_DELETE_LIMIT + ' records');
-        }
-        
-        gs.info('');
-        gs.info('--- RITM Details ---');
-        
-        var processed = 0;
-        while (gr.next() && processed < this.MAX_DELETE_LIMIT) {
-            this._deleteRITM(gr);
-            processed++;
-        }
-        
-        // Cleanup empty parent requests
-        this._cleanupEmptyRequests();
-        
-        // Print summary
-        this._printSummary();
-    },
-    
-    /**
-     * Delete a single RITM
-     */
-    _deleteRITM: function(gr) {
-        var ritmNumber = gr.number.toString();
-        var requestId = gr.request.toString();
-        var qid = gr.variables.identified_qid_s ? gr.variables.identified_qid_s.toString() : 'N/A';
-        var state = gr.state.getDisplayValue();
-        var created = gr.sys_created_on.toString();
-        
-        gs.info('RITM: ' + ritmNumber + ' | QID: ' + qid + ' | State: ' + state + ' | Created: ' + created);
-        
-        // Track parent request for cleanup
-        if (requestId && this.deletedRequests.indexOf(requestId) === -1) {
-            this.deletedRequests.push(requestId);
-        }
-        
-        if (this.DRY_RUN) {
-            this.deletedRitms.push(ritmNumber + ' (dry run)');
-        } else {
-            try {
-                gr.deleteRecord();
-                this.deletedRitms.push(ritmNumber);
-            } catch (ex) {
-                this.errors.push('Failed to delete ' + ritmNumber + ': ' + ex.getMessage());
-            }
-        }
-    },
-    
-    /**
-     * Clean up parent requests that have no remaining items
-     */
-    _cleanupEmptyRequests: function() {
-        if (this.deletedRequests.length === 0) {
-            return;
-        }
-        
-        gs.info('');
-        gs.info('--- Checking Parent Requests ---');
-        
-        for (var i = 0; i < this.deletedRequests.length; i++) {
-            var reqId = this.deletedRequests[i];
+            var ritmNum = gr.number.toString();
+            var qid = gr.variables.identified_qid_s ? gr.variables.identified_qid_s.toString() : 'N/A';
+            var state = gr.state.getDisplayValue();
+            var created = gr.sys_created_on.toString().substring(0, 10);
+            var requestId = gr.request.toString();
             
-            var reqGr = new GlideRecord('sc_request');
-            if (reqGr.get(reqId)) {
-                // Check if request has any remaining items
-                var itemCheck = new GlideRecord('sc_req_item');
-                itemCheck.addQuery('request', reqId);
-                itemCheck.query();
-                
-                var remainingItems = itemCheck.getRowCount();
-                
-                if (remainingItems === 0 || this.DRY_RUN) {
-                    gs.info('Request: ' + reqGr.number + ' | Remaining Items: ' + remainingItems);
+            // Apply test_only filter
+            if (FILTER === 'test_only' && qid.indexOf('TEST_') !== 0) {
+                skipCount++;
+                continue;
+            }
+            
+            // Pad for alignment
+            while (ritmNum.length < 17) ritmNum += ' ';
+            while (qid.length < 20) qid += ' ';
+            while (state.length < 10) state += ' ';
+            
+            gs.info(ritmNum + '| ' + qid + '| ' + state + '| ' + created);
+            
+            // Track request for cleanup
+            if (requestId && requestsToCheck.indexOf(requestId) === -1) {
+                requestsToCheck.push(requestId);
+            }
+            
+            // Delete if in delete mode
+            if (DELETE_MODE) {
+                gr.deleteRecord();
+                deleteCount++;
+            } else {
+                deleteCount++;
+            }
+        }
+        
+        gs.info('─────────────────────────────────────────────────────────────');
+        gs.info('');
+        
+        if (FILTER === 'test_only') {
+            gs.info('Skipped ' + skipCount + ' non-test RITMs');
+        }
+        
+        // Clean up empty requests
+        if (DELETE_MODE && requestsToCheck.length > 0) {
+            gs.info('Checking ' + requestsToCheck.length + ' parent requests...');
+            var reqDeleted = 0;
+            
+            for (var i = 0; i < requestsToCheck.length; i++) {
+                var reqGr = new GlideRecord('sc_request');
+                if (reqGr.get(requestsToCheck[i])) {
+                    var itemCheck = new GlideRecord('sc_req_item');
+                    itemCheck.addQuery('request', requestsToCheck[i]);
+                    itemCheck.query();
                     
-                    if (remainingItems === 0) {
-                        if (this.DRY_RUN) {
-                            gs.info('  Would delete (empty request)');
-                        } else {
-                            try {
-                                reqGr.deleteRecord();
-                                gs.info('  Deleted (empty request)');
-                            } catch (ex) {
-                                this.errors.push('Failed to delete request ' + reqGr.number + ': ' + ex.getMessage());
-                            }
-                        }
+                    if (itemCheck.getRowCount() === 0) {
+                        gs.info('  Deleted empty request: ' + reqGr.number);
+                        reqGr.deleteRecord();
+                        reqDeleted++;
                     }
                 }
             }
-        }
-    },
-    
-    /**
-     * Print cleanup summary
-     */
-    _printSummary: function() {
-        gs.info('');
-        gs.info('=== CLEANUP SUMMARY ===');
-        gs.info('Mode: ' + (this.DRY_RUN ? 'DRY RUN (no changes made)' : 'LIVE (records deleted)'));
-        gs.info('RITMs processed: ' + this.deletedRitms.length);
-        gs.info('Parent requests checked: ' + this.deletedRequests.length);
-        
-        if (this.errors.length > 0) {
+            gs.info('Deleted ' + reqDeleted + ' empty parent requests');
             gs.info('');
-            gs.info('--- Errors ---');
-            for (var i = 0; i < this.errors.length; i++) {
-                gs.error(this.errors[i]);
-            }
         }
         
-        if (this.DRY_RUN) {
-            gs.info('');
-            gs.info('*** This was a DRY RUN. No records were deleted. ***');
-            gs.info('*** Set DRY_RUN = false to actually delete records. ***');
+        // Summary
+        gs.info('╔════════════════════════════════════════════════════════════╗');
+        if (DELETE_MODE) {
+            gs.info('║  DELETED ' + deleteCount + ' RITMs                                       ');
+        } else {
+            gs.info('║  WOULD DELETE ' + deleteCount + ' RITMs (DRY RUN)                        ');
+            gs.info('║                                                            ║');
+            gs.info('║  To actually delete, change DELETE_MODE to true            ║');
         }
-    },
-    
-    type: 'QualysCleanup'
-};
+        gs.info('╚════════════════════════════════════════════════════════════╝');
+    }
+}
 
-// ============================================================
-// USAGE EXAMPLES (uncomment one to run)
-// ============================================================
-
-var cleanup = new QualysCleanup();
-
-// IMPORTANT: Update the catalog item sys_id first!
-// cleanup.CATALOG_ITEM_SYS_ID = 'your_actual_sys_id_here';
-
-// Preview what would be deleted (DRY RUN)
-// cleanup.DRY_RUN = true;
-// cleanup.deleteAll();
-
-// Delete all RITMs for this catalog item
-// cleanup.DRY_RUN = false;
-// cleanup.deleteAll();
-
-// Delete only today's RITMs
-// cleanup.DRY_RUN = false;
-// cleanup.deleteTodayOnly();
-
-// Delete RITMs from specific date range
-// cleanup.DRY_RUN = false;
-// cleanup.deleteByDateRange('2024-01-01', '2024-01-15');
-
-// Delete RITMs with specific QID pattern
-// cleanup.DRY_RUN = false;
-// cleanup.deleteByQIDPattern('90007');
-
-// Delete only test RITMs (QID starts with TEST_)
-// cleanup.DRY_RUN = false;
-// cleanup.deleteTestRITMs();
-
-// Delete only open RITMs
-// cleanup.DRY_RUN = false;
-// cleanup.deleteByState('open');
-
-// Delete only closed RITMs
-// cleanup.DRY_RUN = false;
-// cleanup.deleteByState('closed');
+gs.info('');
+gs.info('Script complete.');
